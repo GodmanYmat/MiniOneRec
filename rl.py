@@ -5,7 +5,8 @@ import numpy as np
 import torch
 from data import D3Dataset, SidDataset, RLTitle2SidDataset, RLSeqTitle2SidDataset, RLSid2TitleDataset, RLSidhis2TitleDataset
 from torch.utils.data import ConcatDataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoTokenizer
+from accelerate import PartialState
 import os
 from minionerec_trainer import ReReTrainer
 from sasrec import SASRec
@@ -155,12 +156,8 @@ def train(
     print("train_dataset: ", train_dataset)
     print("eval_dataset: ", eval_dataset)
 
-    llm_model = AutoModelForCausalLM.from_pretrained(
-        model_path,
-        torch_dtype=torch.bfloat16 if bf16 else torch.float32,
-        device_map="auto",
-    )
-    device = llm_model.device
+    # Use this process's device without loading another copy of the LLM.
+    device = PartialState().device
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     
     len_seq = 10
@@ -175,7 +172,7 @@ def train(
     if reward_type == "semantic":
         with open(ada_path, "rb") as f:
             item_ada_embd = pickle.load(f)
-        item_ada_embd = torch.tensor(item_ada_embd).to(llm_model.device)
+        item_ada_embd = torch.tensor(item_ada_embd).to(device)
 
     print("Load item_ada_embd successfully.")
 
