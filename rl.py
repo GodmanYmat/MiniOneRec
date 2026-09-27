@@ -66,7 +66,28 @@ def train(
     item_meta_path: str = "",
     dapo: bool = False,
     gspo: bool = False,
+    # -1 preserves the original dataset sizes and epoch-based training.
+    debug_sample: int = -1,
+    max_steps: int = -1,
+    # Maximum generated tokens per completion, excluding the prompt.
+    max_completion_length: int = 128,
+    optim: str = "paged_adamw_32bit",
+    report_to: str = "wandb",
+    # Limit intermediate checkpoint-* directories, not the final model export.
+    save_total_limit: int = 20,
+    bf16: bool = True,
+    fp16: bool = False,
 ):
+    if bf16 and fp16:
+        raise ValueError("bf16 and fp16 cannot both be enabled")
+    if debug_sample != -1 and debug_sample <= 0:
+        raise ValueError("debug_sample must be -1 or a positive integer")
+    if max_steps != -1 and max_steps <= 0:
+        raise ValueError("max_steps must be -1 or a positive integer")
+    if max_completion_length <= 0:
+        raise ValueError("max_completion_length must be a positive integer")
+    if save_total_limit <= 0:
+        raise ValueError("save_total_limit must be a positive integer")
     torch.backends.cuda.enable_flash_sdp(False)  
     torch.backends.cuda.enable_mem_efficient_sdp(False)
     set_seed(seed)
@@ -81,7 +102,8 @@ def train(
         item_name = [_.split('\t')[0].strip() for _ in info]
         item2id = {name: i for i, name in enumerate(item_name)}
 
-    sample = -1
+    sample = debug_sample
+    seq_sample = debug_sample if debug_sample > 0 else 10000
     train_datasets = []
     # train_data = D3Dataset(train_file, category=category_dict[category], sample=sample)
     # train_datasets.append(train_data)
@@ -89,7 +111,7 @@ def train(
     train_datasets.append(train_data1)
     train_data2 = RLTitle2SidDataset(item_file=item_meta_path, index_file=sid_index_path, category=category_dict[category], sample=sample)
     train_datasets.append(train_data2)
-    train_data3 = RLSeqTitle2SidDataset(train_file, category=category_dict[category], sample=10000)
+    train_data3 = RLSeqTitle2SidDataset(train_file, category=category_dict[category], sample=seq_sample)
     train_datasets.append(train_data3)
     # train_data4 = RLSid2TitleDataset(item_file=item_meta_path, index_file=sid_index_path, category=category_dict[category], sample=sample)
     # train_datasets.append(train_data4)
@@ -133,7 +155,11 @@ def train(
     print("train_dataset: ", train_dataset)
     print("eval_dataset: ", eval_dataset)
 
-    llm_model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16, device_map="auto")
+    llm_model = AutoModelForCausalLM.from_pretrained(
+        model_path,
+        torch_dtype=torch.bfloat16 if bf16 else torch.float32,
+        device_map="auto",
+    )
     device = llm_model.device
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     
@@ -262,9 +288,9 @@ def train(
 
     training_args = GRPOConfig(output_dir=output_dir,
                                 save_steps=0.1,
-                                save_total_limit=20,
+                                save_total_limit=save_total_limit,
                                 eval_strategy="steps",
-                                max_completion_length=128,
+                                max_completion_length=max_completion_length,
                                 num_generations=num_generations,
                                 temperature=temperature,
                                 sync_ref_model=sync_ref_model,
@@ -278,11 +304,13 @@ def train(
                                 warmup_ratio=0.03,
                                 max_grad_norm= 0.3,
                                 num_train_epochs=num_train_epochs,
-                                bf16=True,
-                                optim="paged_adamw_32bit",
+                                max_steps=max_steps,
+                                bf16=bf16,
+                                fp16=fp16,
+                                optim=optim,
                                 lr_scheduler_type="cosine", 
                                 save_strategy="steps",
-                                report_to="wandb",
+                                report_to=report_to,
                                 run_name=wandb_run_name,
                             )
     trainer = ReReTrainer(

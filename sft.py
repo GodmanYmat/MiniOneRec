@@ -113,7 +113,14 @@ def train(
     train_from_scratch: bool = False,
     sid_index_path: str = "",
     item_meta_path: str = "",
+    # Shared evaluation/save interval: (0, 1) is a fraction of total steps;
+    # positive integers are optimizer-step intervals.
+    eval_step: float = 0.05,
+    bf16: bool = True,
+    fp16: bool = False,
 ):
+    if bf16 and fp16:
+        raise ValueError("bf16 and fp16 cannot both be enabled")
     set_seed(seed)
     os.environ['WANDB_PROJECT'] = wandb_project
     category_dict = {"Industrial_and_Scientific": "industrial and scientific items", "Office_Products": "office products", "Toys_and_Games": "toys and games", "Sports": "sports and outdoors", "Books": "books"}
@@ -134,7 +141,8 @@ def train(
     if not train_from_scratch:
         model = AutoModelForCausalLM.from_pretrained(
             base_model,
-            torch_dtype=torch.bfloat16,
+            # FP16 mixed precision uses FP32 weights with Trainer autocast.
+            torch_dtype=torch.bfloat16 if bf16 else torch.float32,
         )
     else:
         config = AutoConfig.from_pretrained(base_model)
@@ -223,7 +231,6 @@ def train(
 
     print(hf_train_dataset)
     print(hf_val_dataset)
-    eval_step = 0.05
     trainer = transformers.Trainer(
         # deepspeed=deepspeed,
         model=model,
@@ -238,7 +245,8 @@ def train(
             warmup_steps=20,
             num_train_epochs=num_epochs,
             learning_rate=learning_rate,
-            bf16=True,
+            bf16=bf16,
+            fp16=fp16,
             logging_steps=1,
             optim="adamw_torch",
             eval_strategy="steps",
